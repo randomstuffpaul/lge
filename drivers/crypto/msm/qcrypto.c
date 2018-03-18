@@ -1,6 +1,6 @@
 /* Qualcomm Crypto driver
  *
- * Copyright (c) 2010-2015, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2010-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -1270,13 +1270,13 @@ static void _qcrypto_tfm_complete(struct crypto_priv *cp, u32 type,
 	}
 again:
 	spin_lock_irqsave(&cp->lock, flags);
-	if (list_empty(plist)) {
+	if (!plist||list_empty(plist)) {
 		arsp = NULL; /* nothing to do */
 		pending_list = false;
 	} else {
 		arsp = list_first_entry(plist,
 				struct  qcrypto_resp_ctx, list);
-		if (arsp->res == -EINPROGRESS)
+		if (!arsp||arsp->res == -EINPROGRESS)
 			arsp = NULL;  /* still in progress */
 		else
 			list_del(&arsp->list); /* request is complete */
@@ -1885,12 +1885,12 @@ static int _qcrypto_process_aead(struct  crypto_engine *pengine,
 			 * include  assoicated data, ciphering data stream,
 			 * generated MAC, and CCM padding.
 			 */
-			if ((MAX_ALIGN_SIZE * 2 > ULONG_MAX - req->assoclen) ||
+			if ((MAX_ALIGN_SIZE * 2 > UINT_MAX - req->assoclen) ||
 				((MAX_ALIGN_SIZE * 2 + req->assoclen) >
-						ULONG_MAX - qreq.ivsize) ||
+						UINT_MAX - qreq.ivsize) ||
 				((MAX_ALIGN_SIZE * 2 + req->assoclen
 					+ qreq.ivsize)
-						> ULONG_MAX - req->cryptlen)) {
+						> UINT_MAX - req->cryptlen)) {
 				pr_err("Integer overflow on aead req length.\n");
 				return -EINVAL;
 			}
@@ -5052,9 +5052,9 @@ static ssize_t _debug_stats_read(struct file *file, char __user *buf,
 
 	len = _disp_stats(qcrypto);
 
-	rc = simple_read_from_buffer((void __user *) buf, len,
+	if (len <= count)
+		rc = simple_read_from_buffer((void __user *) buf, len,
 			ppos, (void *) _debug_read_buf, len);
-
 	return rc;
 }
 
