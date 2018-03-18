@@ -1815,9 +1815,13 @@ int cpufreq_driver_target(struct cpufreq_policy *policy,
 			  unsigned int relation)
 {
 	int ret = -EINVAL;
-
+#ifdef CONFIG_LGE_LBFC
+	if (!down_write_trylock(&policy->rwsem)) {
+		return ret;
+	}
+#else
 	down_write(&policy->rwsem);
-
+#endif
 	ret = __cpufreq_driver_target(policy, target_freq, relation);
 
 	up_write(&policy->rwsem);
@@ -2036,6 +2040,7 @@ static int cpufreq_set_policy(struct cpufreq_policy *policy,
 
 	policy->min = new_policy->min;
 	policy->max = new_policy->max;
+	trace_cpu_frequency_limits(policy->max, policy->min, policy->cpu);
 
 	pr_debug("new min and max freqs are %u - %u kHz\n",
 					policy->min, policy->max);
