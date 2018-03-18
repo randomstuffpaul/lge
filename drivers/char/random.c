@@ -254,6 +254,7 @@
 #include <linux/percpu.h>
 #include <linux/cryptohash.h>
 #include <linux/fips.h>
+#include <linux/cc_mode.h>
 #include <linux/ptrace.h>
 #include <linux/kmemcheck.h>
 #include <linux/irq.h>
@@ -291,14 +292,21 @@
  * The minimum number of bits of entropy before we wake up a read on
  * /dev/random.  Should be enough to do a significant reseed.
  */
+#ifdef CONFIG_CRYPTO_FIPS
+static int random_read_wakeup_thresh = 256;
+#else
 static int random_read_wakeup_thresh = 64;
-
+#endif
 /*
  * If the entropy count falls under this number of bits, then we
  * should wake up processes which are selecting or polling on write
  * access to /dev/random.
  */
+#ifdef CONFIG_CRYPTO_FIPS
+static int random_write_wakeup_thresh = 320;
+#else
 static int random_write_wakeup_thresh = 128;
+#endif
 
 /*
  * When the input pool goes over trickle_thresh, start dropping most
@@ -1222,6 +1230,12 @@ random_read(struct file *file, char __user *buf, size_t nbytes, loff_t *ppos)
 static ssize_t
 urandom_read(struct file *file, char __user *buf, size_t nbytes, loff_t *ppos)
 {
+#ifdef CONFIG_CRYPTO_FIPS
+	int cc_flag = get_cc_mode_state();
+	if ((cc_flag & FLAG_FORCE_USE_RANDOM_DEV) == FLAG_FORCE_USE_RANDOM_DEV)
+		return random_read(file, buf, nbytes, ppos);
+	else
+#endif
 	return extract_entropy_user(&nonblocking_pool, buf, nbytes);
 }
 
@@ -1501,6 +1515,28 @@ unsigned int get_random_int(void)
 	return ret;
 }
 EXPORT_SYMBOL(get_random_int);
+
+/*
+ * Same as get_random_int(), but returns unsigned long.
+ */
+unsigned long get_random_long(void)
+{
+	__u32 *hash;
+	unsigned long ret;
+
+	if (arch_get_random_long(&ret))
+		return ret;
+
+	hash = get_cpu_var(get_random_int_hash);
+
+	hash[0] += current->pid + jiffies + get_cycles();
+	md5_transform(hash, random_int_secret);
+	ret = *(unsigned long *)hash;
+	put_cpu_var(get_random_int_hash);
+
+	return ret;
+}
+EXPORT_SYMBOL(get_random_long);
 
 /*
  * randomize_range() returns a start address such that

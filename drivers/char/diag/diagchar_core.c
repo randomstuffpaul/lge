@@ -1,4 +1,4 @@
-/* Copyright (c) 2008-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2008-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -692,7 +692,7 @@ static int diag_process_userspace_remote(int proc, void *buf, int len)
 	int bridge_index = proc - 1;
 
 	if (!buf || len < 0) {
-		pr_err("diag: Invalid input in %s, buf: %p, len: %d\n",
+		pr_err("diag: Invalid input in %s, buf: %pK, len: %d\n",
 		       __func__, buf, len);
 		return -EINVAL;
 	}
@@ -1158,6 +1158,13 @@ static int diag_ioctl_set_buffering_mode(unsigned long ioarg)
 	if (copy_from_user(&params, (void __user *)ioarg, sizeof(params)))
 		return -EFAULT;
 
+	if (params.peripheral >= NUM_SMD_CONTROL_CHANNELS)
+		return -EINVAL;
+
+	mutex_lock(&driver->mode_lock);
+	driver->buffering_flag[params.peripheral] = 1;
+	mutex_unlock(&driver->mode_lock);
+
 	return diag_send_peripheral_buffering_mode(&params);
 }
 
@@ -1602,8 +1609,15 @@ static ssize_t diagchar_write(struct file *file, const char __user *buf,
 	uint8_t retry_count = 0;
 	uint8_t max_retries = 3;
 #ifdef DIAG_DEBUG
+#ifndef CONFIG_LGE_USB_G_ANDROID
 	int length = 0, i;
 #endif
+#endif
+
+#ifdef CONFIG_LGE_DM_APP
+    char *buf_cmp;
+#endif
+
 	struct diag_send_desc_type send = { NULL, NULL, DIAG_STATE_START, 0 };
 	struct diag_hdlc_dest_type enc = { NULL, NULL, 0 };
 	void *buf_copy = NULL;
@@ -1639,6 +1653,16 @@ static ssize_t diagchar_write(struct file *file, const char __user *buf,
 		return -EIO;
 	}
 #endif /* DIAG over USB */
+
+#ifdef CONFIG_LGE_DM_APP
+    if (driver->logging_mode == DM_APP_MODE) {
+        /* only diag cmd #250 for supporting testmode tool */
+        buf_cmp = (char *)buf + 4;
+        if (*(buf_cmp) != 0xFA)
+            return 0;
+    }
+#endif
+
 	if (pkt_type == DCI_DATA_TYPE) {
 		user_space_data = diagmem_alloc(driver, payload_size,
 								POOL_TYPE_USER);
@@ -1749,9 +1773,14 @@ static ssize_t diagchar_write(struct file *file, const char __user *buf,
 		buf = buf + 4;
 #ifdef DIAG_DEBUG
 		pr_debug("diag: user space data %d\n", payload_size);
+#ifdef CONFIG_LGE_USB_G_ANDROID
+		print_hex_dump(KERN_DEBUG, "user: ", 16, 1, DUMP_PREFIX_ADDRESS,
+				driver->user_space_data_buf + token_offset, payload_size, 1);
+#else
 		for (i = 0; i < payload_size; i++)
 			pr_debug("\t %x", *((driver->user_space_data_buf
 						+ token_offset)+i));
+#endif
 #endif
 		err = diag_process_userspace_remote(remote_proc,
 						    driver->user_space_data_buf
@@ -1837,9 +1866,14 @@ static ssize_t diagchar_write(struct file *file, const char __user *buf,
 
 #ifdef DIAG_DEBUG
 	printk(KERN_DEBUG "data is -->\n");
+#ifdef CONFIG_LGE_USB_G_ANDROID
+	print_hex_dump(KERN_DEBUG, "data: ", 16, 1, DUMP_PREFIX_ADDRESS,
+			(unsigned char *)buf_copy, payload_size, 1);
+#else
 	for (i = 0; i < payload_size; i++)
 		printk(KERN_DEBUG "\t %x \t", *(((unsigned char *)buf_copy)+i));
 #endif
+#endif /* DIAG DEBUG */
 	send.state = DIAG_STATE_START;
 	send.pkt = buf_copy;
 	send.last = (void *)(buf_copy + payload_size - 1);
@@ -1847,6 +1881,7 @@ static ssize_t diagchar_write(struct file *file, const char __user *buf,
 #ifdef DIAG_DEBUG
 	pr_debug("diag: Already used bytes in buffer %d, and"
 	" incoming payload size is %d\n", driver->used, payload_size);
+#ifndef CONFIG_LGE_USB_G_ANDROID
 	printk(KERN_DEBUG "hdlc encoded data is -->\n");
 	for (i = 0; i < payload_size + 8; i++) {
 		printk(KERN_DEBUG "\t %x \t", *(((unsigned char *)buf_hdlc)+i));
@@ -1854,6 +1889,7 @@ static ssize_t diagchar_write(struct file *file, const char __user *buf,
 			length++;
 	}
 #endif
+#endif /* DIAG DEBUG */
 	mutex_lock(&driver->diagchar_mutex);
 	if (!buf_hdlc)
 		buf_hdlc = diagmem_alloc(driver, HDLC_OUT_BUF_SIZE,
