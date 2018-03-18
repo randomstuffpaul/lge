@@ -176,13 +176,21 @@ struct sock *cookie_v6_check(struct sock *sk, struct sk_buff *skb)
 
 	/* check for timestamp cookie support */
 	memset(&tcp_opt, 0, sizeof(tcp_opt));
+#ifdef CONFIG_LGP_DATA_TCPIP_MPTCP
+	tcp_parse_options(skb, &tcp_opt, NULL, 0, NULL);
+#else
 	tcp_parse_options(skb, &tcp_opt, 0, NULL);
+#endif
 
 	if (!cookie_check_timestamp(&tcp_opt, sock_net(sk), &ecn_ok))
 		goto out;
 
 	ret = NULL;
+#ifdef CONFIG_LGP_DATA_TCPIP_MPTCP
+	req = inet_reqsk_alloc(&tcp6_request_sock_ops);
+#else
 	req = inet6_reqsk_alloc(&tcp6_request_sock_ops);
+#endif
 	if (!req)
 		goto out;
 
@@ -237,7 +245,7 @@ struct sock *cookie_v6_check(struct sock *sk, struct sk_buff *skb)
 		memset(&fl6, 0, sizeof(fl6));
 		fl6.flowi6_proto = IPPROTO_TCP;
 		fl6.daddr = ireq6->rmt_addr;
-		final_p = fl6_update_dst(&fl6, np->opt, &final);
+		final_p = fl6_update_dst(&fl6, rcu_dereference(np->opt), &final);
 		fl6.saddr = ireq6->loc_addr;
 		fl6.flowi6_oif = sk->sk_bound_dev_if;
 		fl6.flowi6_mark = ireq->ir_mark;
@@ -252,10 +260,17 @@ struct sock *cookie_v6_check(struct sock *sk, struct sk_buff *skb)
 	}
 
 	req->window_clamp = tp->window_clamp ? :dst_metric(dst, RTAX_WINDOW);
+#ifdef CONFIG_LGP_DATA_TCPIP_MPTCP
+	tp->select_initial_window(tcp_full_space(sk), req->mss,
+				  &req->rcv_wnd, &req->window_clamp,
+				  ireq->wscale_ok, &rcv_wscale,
+				  dst_metric(dst, RTAX_INITRWND), sk);
+#else
 	tcp_select_initial_window(tcp_full_space(sk), req->mss,
 				  &req->rcv_wnd, &req->window_clamp,
 				  ireq->wscale_ok, &rcv_wscale,
 				  dst_metric(dst, RTAX_INITRWND));
+#endif
 
 	ireq->rcv_wscale = rcv_wscale;
 
