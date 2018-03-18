@@ -28,6 +28,10 @@
 #include "mdss_panel.h"
 #include "mdss_debug.h"
 
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
+#include "lge/panel/oem_mdss_dsi_common.h"
+#endif
+
 #define VSYNC_PERIOD 17
 #define DMA_TX_TIMEOUT 200
 #define DMA_TPG_FIFO_LEN 64
@@ -97,7 +101,7 @@ void mdss_dsi_ctrl_init(struct device *ctrl_dev,
 	if (ctrl->mdss_util->register_irq(ctrl->dsi_hw))
 		pr_err("%s: mdss_register_irq failed.\n", __func__);
 
-	pr_debug("%s: ndx=%d base=%p\n", __func__, ctrl->ndx, ctrl->ctrl_base);
+	pr_debug("%s: ndx=%d base=%pK\n", __func__, ctrl->ndx, ctrl->ctrl_base);
 
 	init_completion(&ctrl->dma_comp);
 	init_completion(&ctrl->mdp_comp);
@@ -2190,8 +2194,12 @@ int mdss_dsi_cmdlist_commit(struct mdss_dsi_ctrl_pdata *ctrl, int from_mdp)
 
 	/* make sure dsi_cmd_mdp is idle */
 	mdss_dsi_cmd_mdp_busy(ctrl);
-
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
+	if (lge_mdss_dsi.lge_mdss_dsi_cmdlist_commit)
+		ctrl->hw_rev = lge_mdss_dsi.lge_mdss_dsi_cmdlist_commit(ctrl, from_mdp);
+#else
 	mdss_dsi_get_hw_revision(ctrl);
+#endif
 
 	/* For DSI versions less than 1.3.0, CMD DMA TPG is not supported */
 	if (req && (ctrl->hw_rev < MDSS_DSI_HW_REV_103))

@@ -1782,7 +1782,12 @@ int mdss_mdp_pipe_queue_data(struct mdss_mdp_pipe *pipe,
 	params_changed = (pipe->params_changed) ||
 		((pipe->type == MDSS_MDP_PIPE_TYPE_DMA) &&
 		 (pipe->mixer_left->type == MDSS_MDP_MIXER_TYPE_WRITEBACK) &&
+#if !defined(CONFIG_LGE_CAM_PREVIEW_TUNE)
 		 (ctl->mdata->mixer_switched)) || ctl->roi_changed;
+#else
+		 (ctl->mdata->mixer_switched)) || ctl->roi_changed ||
+		 (pipe->type == MDSS_MDP_PIPE_TYPE_VIG);
+#endif
 	if ((!(pipe->flags & MDP_VPU_PIPE) && (src_data == NULL)) ||
 	    (pipe->flags & MDP_SOLID_FILL)) {
 		pipe->params_changed = 0;
@@ -1832,7 +1837,7 @@ int mdss_mdp_pipe_queue_data(struct mdss_mdp_pipe *pipe,
 	}
 
 	if (src_data == NULL) {
-		pr_debug("src_data=%p pipe num=%dx\n",
+		pr_debug("src_data=%pK pipe num=%dx\n",
 				src_data, pipe->num);
 		goto update_nobuf;
 	}
