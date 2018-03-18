@@ -1,4 +1,4 @@
-/* Copyright (c) 2008-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2008-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -144,11 +144,16 @@ struct kgsl_memdesc {
 	size_t size;
 	unsigned int priv; /* Internal flags and settings */
 	struct scatterlist *sg;
+#ifdef CONFIG_LGE_KGSL_OFFSET_SEARCH
+	unsigned int offseted_sg;
+#endif
 	unsigned int sglen; /* Active entries in the sglist */
 	struct kgsl_memdesc_ops *ops;
 	unsigned int flags; /* Flags set from userspace */
 	struct device *dev;
 	struct dma_attrs attrs;
+	struct page **pages;
+	unsigned int page_count;
 };
 
 /*
