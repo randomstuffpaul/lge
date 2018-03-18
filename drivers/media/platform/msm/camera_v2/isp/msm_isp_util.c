@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -182,6 +182,7 @@ int msm_isp_update_bandwidth(enum msm_isp_hw_client client,
 				isp_bandwidth_mgr.client_info[i].ib;
 		}
 	}
+
 	msm_bus_scale_client_update_request(isp_bandwidth_mgr.bus_client,
 		isp_bandwidth_mgr.bus_vector_active_idx);
 	/* Insert into circular buffer */
@@ -333,7 +334,11 @@ int msm_isp_get_clk_info(struct vfe_device *vfe_dev,
 static inline void msm_isp_get_timestamp(struct msm_isp_timestamp *time_stamp)
 {
 	struct timespec ts;
+#if 1 //LGE_CHANGE, QCT patch(0228081) for AV sync issue on video recording, sunjae.jung@lge.com, 2015-12-23
 	ktime_get_ts(&ts);
+#else
+	get_monotonic_boottime(&ts); //LGE_CHANGE, QCT patch(0228081) Revert for msm8937 post-cs3 migration, joongeun.choi@lge.com, 2016-05-04
+#endif
 	time_stamp->buf_time.tv_sec = ts.tv_sec;
 	time_stamp->buf_time.tv_usec = ts.tv_nsec/1000;
 	do_gettimeofday(&(time_stamp->event_time));
@@ -720,6 +725,7 @@ static long msm_isp_ioctl_unlocked(struct v4l2_subdev *sd,
 	unsigned int cmd, void *arg)
 {
 	long rc = 0;
+	long rc2 = 0;
 	struct vfe_device *vfe_dev = v4l2_get_subdevdata(sd);
 
 	if (!vfe_dev || !vfe_dev->vfe_base) {
@@ -786,13 +792,17 @@ static long msm_isp_ioctl_unlocked(struct v4l2_subdev *sd,
 	case VIDIOC_MSM_ISP_AXI_RESET:
 		mutex_lock(&vfe_dev->core_mutex);
 		rc = msm_isp_stats_reset(vfe_dev);
-		rc |= msm_isp_axi_reset(vfe_dev, arg);
+		rc2 |= msm_isp_axi_reset(vfe_dev, arg);
+		if (!rc && rc2)
+			rc = rc2;
 		mutex_unlock(&vfe_dev->core_mutex);
 		break;
 	case VIDIOC_MSM_ISP_AXI_RESTART:
 		mutex_lock(&vfe_dev->core_mutex);
 		rc = msm_isp_stats_restart(vfe_dev);
-		rc |= msm_isp_axi_restart(vfe_dev, arg);
+		rc2 |= msm_isp_axi_restart(vfe_dev, arg);
+		if (!rc && rc2)
+			rc = rc2;
 		mutex_unlock(&vfe_dev->core_mutex);
 		break;
 	case VIDIOC_MSM_ISP_INPUT_CFG:
@@ -969,7 +979,8 @@ static int msm_isp_send_hw_cmd(struct vfe_device *vfe_dev,
 	case VFE_READ_DMI_16BIT:
 	case VFE_READ_DMI_32BIT:
 	case VFE_READ_DMI_64BIT: {
-		if (reg_cfg_cmd->cmd_type == VFE_WRITE_DMI_64BIT) {
+		if (reg_cfg_cmd->cmd_type == VFE_WRITE_DMI_64BIT ||
+			reg_cfg_cmd->cmd_type == VFE_READ_DMI_64BIT) {
 			if ((reg_cfg_cmd->u.dmi_info.hi_tbl_offset <=
 				reg_cfg_cmd->u.dmi_info.lo_tbl_offset) ||
 				(reg_cfg_cmd->u.dmi_info.hi_tbl_offset -
@@ -1049,7 +1060,7 @@ static int msm_isp_send_hw_cmd(struct vfe_device *vfe_dev,
 			is_module_cfg_lock_needed(reg_cfg_cmd->
 			u.mask_info.reg_offset);
 		if (grab_lock)
-			spin_lock_irqsave(&vfe_dev->shared_data_lock, flags);
+			spin_lock_irqsave(&vfe_dev->shared_cfg_reg_lock, flags); //LGE_CHANGE, 20150609, Change spin_lock for watchodog case using shard_data_lock, changhwan.kang.kang
 		temp = msm_camera_io_r(vfe_dev->vfe_base +
 			reg_cfg_cmd->u.mask_info.reg_offset);
 
@@ -1058,8 +1069,7 @@ static int msm_isp_send_hw_cmd(struct vfe_device *vfe_dev,
 		msm_camera_io_w(temp, vfe_dev->vfe_base +
 			reg_cfg_cmd->u.mask_info.reg_offset);
 		if (grab_lock)
-			spin_unlock_irqrestore(&vfe_dev->shared_data_lock,
-				flags);
+			spin_unlock_irqrestore(&vfe_dev->shared_cfg_reg_lock, flags); //LGE_CHANGE, 20150609, Change spin_lock for watchodog case using shard_data_lock, changhwan.kang.kang
 		break;
 	}
 	case VFE_WRITE_DMI_16BIT:
@@ -1556,14 +1566,37 @@ void msm_isp_update_error_frame_count(struct vfe_device *vfe_dev)
 {
 	struct msm_vfe_error_info *error_info = &vfe_dev->error_info;
 	error_info->info_dump_frame_count++;
-	if (error_info->info_dump_frame_count == 0)
-		error_info->info_dump_frame_count++;
 }
 
+/*LGE_CHANGE_S, CST, added page fault handler for dual isp */
+struct vfe_device * msm_isp_get_other_vfe(struct vfe_device *vfe_dev)
+{
+	struct v4l2_subdev *subdev= NULL;
 
+	if(vfe_dev->pdev->id ==0)
+		subdev = list_entry(vfe_dev->subdev.sd.list.next, struct v4l2_subdev, list);
+	else
+		subdev = list_entry(vfe_dev->subdev.sd.list.prev, struct v4l2_subdev, list);
+
+	return (struct vfe_device *)subdev->dev_priv;
+}
+
+void msm_isp_handle_iommu_page_fault(struct vfe_device *vfe_dev)
+{
+	pr_err("%s:%d] vfe_dev %p id %d\n", __func__,
+		__LINE__, vfe_dev, vfe_dev->pdev->id);
+
+	msm_isp_axi_disable_all_wm(vfe_dev);
+	msm_isp_stats_disable(vfe_dev);
+	/* VFE_SRC_MAX will call reg update on all stream src */
+	vfe_dev->hw_info->vfe_ops.core_ops.reg_update(vfe_dev,
+		VFE_SRC_MAX);
+}
+/*LGE_CHANGE_E, CST, added page fault handler for dual isp */
 void msm_isp_process_iommu_page_fault(struct vfe_device *vfe_dev)
 {
 	struct msm_isp_event_data error_event;
+#if 0 //qct_original
 	struct msm_vfe_axi_halt_cmd halt_cmd;
 	uint32_t i;
 
@@ -1579,7 +1612,13 @@ void msm_isp_process_iommu_page_fault(struct vfe_device *vfe_dev)
 
 	pr_err("%s:%d] vfe_dev %p id %d\n", __func__,
 		__LINE__, vfe_dev, vfe_dev->pdev->id);
+#else	/*LGE_CHANGE, CST, added page fault handler for dual isp */
+	msm_isp_handle_iommu_page_fault(vfe_dev);
 
+	if(vfe_dev->is_split)
+		msm_isp_handle_iommu_page_fault(
+			msm_isp_get_other_vfe(vfe_dev));
+#endif
 	error_event.frame_id =
 		vfe_dev->axi_data.src_info[VFE_PIX_0].frame_id;
 	vfe_dev->buf_mgr->ops->buf_mgr_debug(vfe_dev->buf_mgr);
@@ -1668,6 +1707,7 @@ static void msm_isp_process_overflow_irq(
 		*irq_status0 = 0;
 		*irq_status1 = 0;
 
+		memset(&error_event, 0, sizeof(error_event));
 		error_event.frame_id =
 			vfe_dev->axi_data.src_info[VFE_PIX_0].frame_id;
 		error_event.u.error_info.err_type = ISP_ERROR_BUS_OVERFLOW;
@@ -1683,8 +1723,7 @@ void msm_isp_reset_burst_count_and_frame_drop(
 		stream_info->stream_type != BURST_STREAM) {
 		return;
 	}
-	if (stream_info->stream_type == BURST_STREAM &&
-		stream_info->num_burst_capture != 0) {
+	if (stream_info->num_burst_capture != 0) {
 		framedrop_period = msm_isp_get_framedrop_period(
 		   stream_info->frame_skip_pattern);
 		stream_info->burst_frame_count =
@@ -1923,6 +1962,7 @@ int msm_isp_open_node(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
 	memset(&vfe_dev->fetch_engine_info, 0,
 		sizeof(vfe_dev->fetch_engine_info));
 	vfe_dev->axi_data.hw_info = vfe_dev->hw_info->axi_hw_info;
+	vfe_dev->axi_data.enable_frameid_recovery = 0; /*QCT_PATCH, disable the vfe recovery when frame_id mismatch, 2015-07-14, freeso.kim@lge.com*/
 	vfe_dev->taskletq_idx = 0;
 	vfe_dev->vt_enable = 0;
 	vfe_dev->reg_update_requested = 0;
