@@ -1,0 +1,3 @@
+[submodule "fs/sdfat"]
+	path = fs/sdfat
+	url = https://github.com/randomstuffpaul/sdfat
